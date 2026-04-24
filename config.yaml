@@ -1,0 +1,29 @@
+api:
+  base_url: http://localhost:8000
+  poll_interval_sec: 2
+  request_timeout_sec: 60
+  upload_timeout_sec: 1800
+
+storage:
+  db_path: ./data/scraper.db
+  download_dir: ./data/downloads
+
+youtube:
+  source_service: youtube
+  # Режим по умолчанию для каналов, где не указан явно. video | audio
+  default_mode: video
+  # 720p, иначе максимальное разрешение < 720p. Звук и видео мержатся в mp4.
+  video_format: "bv*[height=720]+ba/b[height=720]/bv*[height<720]+ba/b[height<720]"
+  # Для audio-режима — берём лучшее аудио, перекодируем в audio_codec через ffmpeg.
+  # Это нужно, чтобы OBSC получил файл с явно аудийным расширением (mp3/m4a),
+  # иначе он пытается извлекать кадры из .webm → ffmpeg exit 234.
+  audio_format: "bestaudio/best"
+  audio_codec: mp3
+  audio_quality: "192"
+  merge_output_format: mp4
+
+channels_file: ./channels.json
+
+logging:
+  level: INFO
+  file: ./data/scraper.log
