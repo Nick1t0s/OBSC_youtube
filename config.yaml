@@ -3,6 +3,9 @@ api:
   poll_interval_sec: 2
   request_timeout_sec: 60
   upload_timeout_sec: 1800
+  # Сколько задач держим одновременно в статусе processing на OBSC.
+  # Перед отправкой нового видео ждём, пока число processing-записей < max_in_flight.
+  max_in_flight: 4
 
 storage:
   db_path: ./data/scraper.db
@@ -12,6 +15,10 @@ youtube:
   source_service: youtube
   # Режим по умолчанию для каналов, где не указан явно. video | audio
   default_mode: video
+  # Путь к cookies.txt в Netscape-формате (экспорт из браузера).
+  # Нужен, чтобы обходить YouTube anti-bot ("Sign in to confirm you're not a bot").
+  # Оставь пустым/закомментируй, если не используешь.
+  cookiefile: ./cookies.txt
   # 720p, иначе максимальное разрешение < 720p. Звук и видео мержатся в mp4.
   video_format: "bv*[height=720]+ba/b[height=720]/bv*[height<720]+ba/b[height<720]"
   # Для audio-режима — берём лучшее аудио, перекодируем в audio_codec через ffmpeg.

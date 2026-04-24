@@ -75,6 +75,12 @@ def run(config_path: Path) -> int:
     if default_mode not in ("video", "audio"):
         raise ValueError(f"youtube.default_mode must be video|audio, got {default_mode!r}")
 
+    cookiefile = yt_cfg.get("cookiefile") or None
+    if cookiefile:
+        if not Path(cookiefile).is_file():
+            raise FileNotFoundError(f"youtube.cookiefile not found: {cookiefile}")
+        log.info("using cookies file: %s", cookiefile)
+
     pipeline = Pipeline(
         db=db,
         obsc=obsc,
@@ -86,7 +92,11 @@ def run(config_path: Path) -> int:
         audio_codec=yt_cfg.get("audio_codec", "mp3"),
         audio_quality=str(yt_cfg.get("audio_quality", "192")),
         poll_interval_sec=float(api_cfg.get("poll_interval_sec", 2)),
+        cookiefile=cookiefile,
     )
+
+    max_in_flight = int(api_cfg.get("max_in_flight", 4))
+    log.info("max_in_flight=%d (OBSC processing queue depth)", max_in_flight)
 
     log.info("reconciling state after previous run")
     pipeline.reconcile_on_startup()
@@ -103,7 +113,7 @@ def run(config_path: Path) -> int:
         log.info("=" * 40)
         log.info("channel %d/%d: %s (mode=%s)", ch_idx, len(channels), channel_url, mode)
         try:
-            video_iter = iter_channel_videos(channel_url)
+            video_iter = iter_channel_videos(channel_url, cookiefile=cookiefile)
         except Exception:
             log.exception("failed to list channel %s", channel_url)
             continue
@@ -121,6 +131,7 @@ def run(config_path: Path) -> int:
                 )
                 skipped += 1
                 continue
+            pipeline.wait_for_free_slot(max_in_flight)
             log.info("[%s] new video -> %s (mode=%s)", video_id, video_url, mode)
             try:
                 pipeline.process_video(video_id, video_url, channel_url, mode=mode)
@@ -135,6 +146,8 @@ def run(config_path: Path) -> int:
         )
 
     log.info("=" * 40)
+    log.info("all channels enqueued, draining remaining OBSC tasks")
+    pipeline.drain()
     log.info("all channels processed")
     return 0
 

@@ -47,7 +47,10 @@ def _watch_url(entry: dict) -> Optional[str]:
     return None
 
 
-def iter_channel_videos(channel_url: str) -> Iterator[tuple[str, str]]:
+def iter_channel_videos(
+    channel_url: str,
+    cookiefile: Optional[str] = None,
+) -> Iterator[tuple[str, str]]:
     """Выдаёт (video_id, video_url) для всех видео канала.
 
     Использует flat-extract, чтобы не дёргать info_dict каждого видео на этом шаге.
@@ -63,6 +66,8 @@ def iter_channel_videos(channel_url: str) -> Iterator[tuple[str, str]]:
         "ignoreerrors": True,
         "logger": _ytdlp_adapter,
     }
+    if cookiefile:
+        ydl_opts["cookiefile"] = cookiefile
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(channel_url, download=False)
 
@@ -122,6 +127,7 @@ def download(
     merge_ext: Optional[str] = None,
     audio_codec: Optional[str] = None,
     audio_quality: Optional[str] = None,
+    cookiefile: Optional[str] = None,
 ) -> tuple[Path, dict]:
     """Скачивает видео/аудио и возвращает (путь_к_файлу, метаданные).
 
@@ -148,6 +154,8 @@ def download(
     }
     if merge_ext:
         ydl_opts["merge_output_format"] = merge_ext
+    if cookiefile:
+        ydl_opts["cookiefile"] = cookiefile
     expected_ext: Optional[str] = None
     if audio_codec:
         ydl_opts["postprocessors"] = [{
