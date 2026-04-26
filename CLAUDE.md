@@ -25,7 +25,9 @@ There is currently no lint/format config and no tests.
 
 ### Data flow
 
-`main.py` → `Pipeline.reconcile_on_startup()` → for each channel in `channels.json`: `iter_channel_videos()` → for each video, if not in DB: `Pipeline.wait_for_free_slot(max_in_flight)` → `Pipeline.process_video()` → `download()` → `ObscClient.submit()` (returns after 202/409/error; no inline polling). After the channel loop: `Pipeline.drain()` polls remaining `processing` records until all are terminal.
+`main.py` startup: setup db/obsc/pipeline → `Pipeline.reconcile_on_startup()` (once per process). Then enter the scheduler loop:
+
+For each tick: read `last_start_file`. If a scan is due, write current datetime to the file and call `run_scan()`: for each channel in `channels.json`: `iter_channel_videos()` → for each video, if not in DB: `Pipeline.wait_for_free_slot(max_in_flight)` → `Pipeline.process_video()` → `download()` → `ObscClient.submit()` (returns after 202/409/error; no inline polling). After the channel loop: `Pipeline.drain()` polls remaining `processing` records until all are terminal. Then sleep `check_interval_sec` and tick again.
 
 ### Module boundaries
 
@@ -33,7 +35,7 @@ There is currently no lint/format config and no tests.
 - `scraper/youtube.py` — `yt-dlp` wrapper. `iter_channel_videos()` uses `extract_flat='in_playlist'` and recurses into nested playlists (channel tabs). `download()` returns `(Path, slim_metadata_dict)`; `DownloadFailed` is the only yt-dlp error that pipeline code catches by type.
 - `scraper/obsc_client.py` — thin `requests` wrapper. `submit()` returns raw `(status_code, body)` — the pipeline interprets codes, not the client. `get_task()` returns `None` for 404 (meaningful signal), raises for other non-2xx.
 - `scraper/pipeline.py` — the state machine. Holds the statuses-and-transitions logic end-to-end.
-- `main.py` — config loading, channel iteration, input-level dedup (`db.exists`).
+- `main.py` — config loading, scheduler loop, `last_start_file` read/write, `run_scan()` (channel iteration + drain), input-level dedup (`db.exists`). `reconcile_on_startup()` is called once per process before the loop, **not** per scan.
 
 ### State machine (status column)
 
@@ -72,3 +74,4 @@ This is the contract that makes "kill -9 is safe" work — don't break it withou
 - `config.yaml` is the only runtime config. `youtube.format` is a yt-dlp format selector — current value means "720p, else highest below 720p". Don't change it to allow >720p without a reason.
 - `channels.json` is a plain list of URLs. Prefer URLs ending in `/videos` so yt-dlp lands on the videos tab directly instead of walking Shorts/Streams too.
 - Downloaded files live under `storage.download_dir` and are deleted in a `finally` block after each video — the dir should stay empty between runs.
+- `schedule.scan_interval_sec` and `schedule.check_interval_sec` are independent: scan periodicity (start-to-start) vs. file-poll cadence. `schedule.last_start_file` holds an ISO-format datetime; missing/empty/malformed = "no previous run" (scan immediately).
