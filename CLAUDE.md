@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-YouTube connector for an external OBSC content-processing server. Reads a list of channel URLs from `channels.json`, walks each channel sequentially, downloads every video via `yt-dlp`, and submits the file + metadata to OBSC (`POST /process`). Submission is non-blocking: once OBSC returns 202, the record sits in `processing` and the pipeline moves to the next video. Before each new download, the pipeline polls `GET /task/{id}` for existing `processing` records and waits until their count drops below `api.max_in_flight` (default 4), keeping a steady queue depth on the OBSC side. After the last channel, `drain()` waits for all outstanding `processing` tasks to reach a terminal state. No multithreading, no retries for failed videos — state lives in a local SQLite DB so reruns are idempotent.
+YouTube connector for an external OBSC content-processing server. Reads a list of channel URLs from `channels.json`, walks each channel sequentially, downloads every video via `yt-dlp`, and submits the file + metadata to OBSC (`POST /process`). Submission is non-blocking: once OBSC returns 202, the record sits in `processing` and the pipeline moves to the next video. Before each new download, the pipeline polls `GET /task/{id}` for existing `processing` records and waits until their count drops below `api.max_in_flight` (default 4), keeping a steady queue depth on the OBSC side. After the last channel, `drain()` waits for all outstanding `processing` tasks to reach a terminal state. No multithreading. Download errors are retried inline up to `youtube.download_retries` times within a single run; once exhausted (and for upload/process errors) the record sits in `*_error` and is never retried across runs — state lives in a local SQLite DB so reruns are idempotent.
 
 `API.md` is the **authoritative spec** for the OBSC HTTP contract (status codes, field names, 409/413/422 behavior). Read it before touching `scraper/obsc_client.py` or any `/process`/`/task` logic.
 
@@ -50,7 +50,7 @@ download_error  upload_error  process_error
 - Any non-202/non-409 from `/process` ⇒ `upload_error`. The response body goes into `log_error`.
 - `failed` from `/task` ⇒ `process_error`. OBSC's short `error` field is copied to both `error_message` (truncated) and `log_error` (full).
 - `processing` with missing `task_id` encountered during polling ⇒ `process_error` (should never happen in normal flow; belt-and-suspenders guard).
-- Errored videos (`*_error`) are **never retried** — input dedup (`db.exists`) skips any video already in the DB in any status.
+- Errored videos (`*_error`) are **never retried across runs** — input dedup (`db.exists`) skips any video already in the DB in any status. (Inline download retries inside `process_video` happen *before* the record is moved out of `downloading`, so they don't interact with this dedup.)
 
 ### Reconciliation on startup
 

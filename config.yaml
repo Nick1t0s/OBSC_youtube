@@ -28,6 +28,12 @@ youtube:
   audio_codec: mp3
   audio_quality: "192"
   merge_output_format: mp4
+  # Сколько раз повторять скачивание после ошибки yt-dlp. 0 = без повторов.
+  # После исчерпания попыток видео уходит в download_error и при следующем
+  # прогоне будет пропущено (input-level dedup по db.exists).
+  download_retries: 3
+  # Пауза между попытками скачивания (секунды).
+  download_retry_delay_sec: 5
 
 channels_file: ./channels.json
 

@@ -93,6 +93,8 @@ def run(config_path: Path) -> int:
         audio_quality=str(yt_cfg.get("audio_quality", "192")),
         poll_interval_sec=float(api_cfg.get("poll_interval_sec", 2)),
         cookiefile=cookiefile,
+        download_retries=int(yt_cfg.get("download_retries", 0)),
+        download_retry_delay_sec=float(yt_cfg.get("download_retry_delay_sec", 5)),
     )
 
     max_in_flight = int(api_cfg.get("max_in_flight", 4))

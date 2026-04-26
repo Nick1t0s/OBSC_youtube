@@ -25,6 +25,8 @@ class Pipeline:
         audio_quality: Optional[str],
         poll_interval_sec: float,
         cookiefile: Optional[str] = None,
+        download_retries: int = 0,
+        download_retry_delay_sec: float = 5.0,
     ):
         self.db = db
         self.obsc = obsc
@@ -37,6 +39,8 @@ class Pipeline:
         self.audio_quality = audio_quality
         self.poll_interval_sec = poll_interval_sec
         self.cookiefile = cookiefile
+        self.download_retries = max(0, download_retries)
+        self.download_retry_delay_sec = max(0.0, download_retry_delay_sec)
 
     def process_video(
         self,
@@ -75,34 +79,52 @@ class Pipeline:
         log.info("[%s] downloading (mode=%s)", video_id, mode)
 
         file_path: Optional[Path] = None
-        try:
-            file_path, metadata = download(
-                video_url,
-                self.download_dir,
-                fmt,
-                merge_ext=merge,
-                audio_codec=codec,
-                audio_quality=quality,
-                cookiefile=self.cookiefile,
-            )
-        except DownloadFailed as e:
-            log.warning("[%s] download failed: %s", video_id, e)
-            self.db.update(
-                video_id,
-                status="download_error",
-                error_message=str(e)[:500],
-                log_error=traceback.format_exc(),
-            )
-            return
-        except Exception:
-            log.exception("[%s] unexpected download error", video_id)
-            self.db.update(
-                video_id,
-                status="download_error",
-                error_message="unexpected error",
-                log_error=traceback.format_exc(),
-            )
-            return
+        metadata: dict = {}
+        attempts = self.download_retries + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                file_path, metadata = download(
+                    video_url,
+                    self.download_dir,
+                    fmt,
+                    merge_ext=merge,
+                    audio_codec=codec,
+                    audio_quality=quality,
+                    cookiefile=self.cookiefile,
+                )
+                break
+            except DownloadFailed as e:
+                if attempt < attempts:
+                    log.warning(
+                        "[%s] download attempt %d/%d failed: %s — retrying in %.1fs",
+                        video_id, attempt, attempts, e, self.download_retry_delay_sec,
+                    )
+                    time.sleep(self.download_retry_delay_sec)
+                    continue
+                log.warning("[%s] download failed after %d attempt(s): %s", video_id, attempts, e)
+                self.db.update(
+                    video_id,
+                    status="download_error",
+                    error_message=str(e)[:500],
+                    log_error=traceback.format_exc(),
+                )
+                return
+            except Exception:
+                if attempt < attempts:
+                    log.exception(
+                        "[%s] download attempt %d/%d unexpected error — retrying in %.1fs",
+                        video_id, attempt, attempts, self.download_retry_delay_sec,
+                    )
+                    time.sleep(self.download_retry_delay_sec)
+                    continue
+                log.exception("[%s] unexpected download error after %d attempt(s)", video_id, attempts)
+                self.db.update(
+                    video_id,
+                    status="download_error",
+                    error_message="unexpected error",
+                    log_error=traceback.format_exc(),
+                )
+                return
 
         title = metadata.get("title")
         self.db.update(video_id, status="uploading", title=title)
