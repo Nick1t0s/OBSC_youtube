@@ -1,7 +1,10 @@
 import json
 import logging
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import yaml
 
@@ -40,6 +43,92 @@ def load_channels(path: Path, default_mode: str) -> list[dict]:
         else:
             raise ValueError(f"invalid channel entry: {entry!r}")
     return channels
+
+
+def read_last_start(path: Path) -> Optional[datetime]:
+    """Datetime последнего прогона из last_start_file, либо None если файла
+    нет / он пуст / содержит мусор. Любой из этих случаев = "запусков ещё не было".
+    """
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        log.exception("failed to read %s", path)
+        return None
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        log.warning("malformed datetime in %s: %r — treating as no previous run", path, text)
+        return None
+
+
+def write_last_start(path: Path, dt: datetime) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(dt.isoformat(), encoding="utf-8")
+
+
+def run_scan(
+    pipeline: Pipeline,
+    db: Database,
+    channels_file: Path,
+    default_mode: str,
+    cookiefile: Optional[str],
+    max_in_flight: int,
+) -> None:
+    """Один прогон: пройти все каналы, дождаться, пока сервер обработает все
+    отправленные задачи. Setup (db, obsc, pipeline) и reconcile делаются снаружи —
+    один раз на процесс.
+    """
+    channels = load_channels(channels_file, default_mode)
+    log.info("loaded %d channel(s) from %s", len(channels), channels_file)
+    for idx, ch in enumerate(channels, 1):
+        log.debug("  channel[%d] url=%s mode=%s", idx, ch["url"], ch["mode"])
+
+    for ch_idx, ch in enumerate(channels, 1):
+        channel_url = ch["url"]
+        mode = ch["mode"]
+        log.info("=" * 40)
+        log.info("channel %d/%d: %s (mode=%s)", ch_idx, len(channels), channel_url, mode)
+        try:
+            video_iter = iter_channel_videos(channel_url, cookiefile=cookiefile)
+        except Exception:
+            log.exception("failed to list channel %s", channel_url)
+            continue
+
+        seen = 0
+        skipped = 0
+        processed = 0
+        for video_id, video_url in video_iter:
+            seen += 1
+            if db.exists(video_id):
+                row = db.get(video_id)
+                log.debug(
+                    "[%s] skip (already in DB, status=%s)",
+                    video_id, row["status"],
+                )
+                skipped += 1
+                continue
+            pipeline.wait_for_free_slot(max_in_flight)
+            log.info("[%s] new video -> %s (mode=%s)", video_id, video_url, mode)
+            try:
+                pipeline.process_video(video_id, video_url, channel_url, mode=mode)
+                processed += 1
+            except Exception:
+                # Последний рубеж — чтобы один битый ролик не ронял весь прогон.
+                log.exception("[%s] unhandled pipeline error", video_id)
+
+        log.info(
+            "channel %s done: seen=%d, skipped=%d, processed=%d",
+            channel_url, seen, skipped, processed,
+        )
+
+    log.info("=" * 40)
+    log.info("all channels enqueued, draining remaining OBSC tasks")
+    pipeline.drain()
+    log.info("scan finished")
 
 
 def run(config_path: Path) -> int:
@@ -104,56 +193,48 @@ def run(config_path: Path) -> int:
     pipeline.reconcile_on_startup()
     log.info("reconcile finished")
 
-    channels = load_channels(Path(config["channels_file"]), default_mode)
-    log.info("loaded %d channel(s) from %s", len(channels), config["channels_file"])
-    for idx, ch in enumerate(channels, 1):
-        log.debug("  channel[%d] url=%s mode=%s", idx, ch["url"], ch["mode"])
+    schedule_cfg = config.get("schedule", {})
+    scan_interval = float(schedule_cfg.get("scan_interval_sec", 3600))
+    check_interval = float(schedule_cfg.get("check_interval_sec", 60))
+    last_start_path = Path(schedule_cfg.get("last_start_file", "./data/last_start.txt"))
+    channels_file = Path(config["channels_file"])
 
-    for ch_idx, ch in enumerate(channels, 1):
-        channel_url = ch["url"]
-        mode = ch["mode"]
-        log.info("=" * 40)
-        log.info("channel %d/%d: %s (mode=%s)", ch_idx, len(channels), channel_url, mode)
-        try:
-            video_iter = iter_channel_videos(channel_url, cookiefile=cookiefile)
-        except Exception:
-            log.exception("failed to list channel %s", channel_url)
-            continue
+    log.info(
+        "schedule: scan every %.0fs, check %s every %.0fs",
+        scan_interval, last_start_path, check_interval,
+    )
 
-        seen = 0
-        skipped = 0
-        processed = 0
-        for video_id, video_url in video_iter:
-            seen += 1
-            if db.exists(video_id):
-                row = db.get(video_id)
-                log.debug(
-                    "[%s] skip (already in DB, status=%s)",
-                    video_id, row["status"],
+    while True:
+        last = read_last_start(last_start_path)
+        now = datetime.now()
+        if last is None:
+            log.info("no previous run recorded in %s — starting scan", last_start_path)
+            should_run = True
+        else:
+            elapsed = (now - last).total_seconds()
+            if elapsed >= scan_interval:
+                log.info(
+                    "last run %.0fs ago (>= %.0fs interval) — starting scan",
+                    elapsed, scan_interval,
                 )
-                skipped += 1
-                continue
-            pipeline.wait_for_free_slot(max_in_flight)
-            log.info("[%s] new video -> %s (mode=%s)", video_id, video_url, mode)
+                should_run = True
+            else:
+                log.debug(
+                    "last run %.0fs ago (< %.0fs interval) — waiting",
+                    elapsed, scan_interval,
+                )
+                should_run = False
+
+        if should_run:
+            write_last_start(last_start_path, now)
             try:
-                pipeline.process_video(video_id, video_url, channel_url, mode=mode)
-                processed += 1
+                run_scan(pipeline, db, channels_file, default_mode, cookiefile, max_in_flight)
             except Exception:
-                # Последний рубеж — чтобы один битый ролик не ронял весь прогон.
-                log.exception("[%s] unhandled pipeline error", video_id)
+                log.exception("scan crashed; will retry on next scheduled cycle")
 
-        log.info(
-            "channel %s done: seen=%d, skipped=%d, processed=%d",
-            channel_url, seen, skipped, processed,
-        )
-
-    log.info("=" * 40)
-    log.info("all channels enqueued, draining remaining OBSC tasks")
-    pipeline.drain()
-    log.info("all channels processed")
-    return 0
+        time.sleep(check_interval)
 
 
 if __name__ == "__main__":
     cfg = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("config.yaml")
-    sys.exit(run(cfg))
+    sys.exit(run(cfg) or 0)

@@ -37,6 +37,17 @@ youtube:
 
 channels_file: ./channels.json
 
+# Расписание периодического сканирования.
+# scan_interval_sec  — как часто запускать новый прогон по каналам.
+# check_interval_sec — как часто читать last_start_file и решать, пора ли сканировать.
+# last_start_file    — путь к файлу с datetime начала последнего прогона (ISO-формат).
+#                      Если файла нет или он пуст — сканируем сразу. Удалить файл
+#                      вручную = триггер немедленного сканирования.
+schedule:
+  scan_interval_sec: 3600
+  check_interval_sec: 60
+  last_start_file: ./data/last_start.txt
+
 logging:
   level: INFO
   file: ./data/scraper.log
