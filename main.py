@@ -1,6 +1,7 @@
 import json
 import logging
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,22 @@ from scraper.youtube import iter_channel_videos
 
 log = logging.getLogger("scraper.main")
 
+
+def _start_admin(config: dict) -> None:
+    admin_cfg = config.get("admin", {})
+    if not admin_cfg.get("enabled", True):
+        return
+    try:
+        from admin.app import create_app
+        app = create_app(config)
+        host = str(admin_cfg.get("host", "0.0.0.0"))
+        port = int(admin_cfg.get("port", 8080))
+        log.info("admin panel starting on %s:%d", host, port)
+        # Silence werkzeug startup banner — it goes to root logger
+        logging.getLogger("werkzeug").setLevel(logging.WARNING)
+        app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)
+    except Exception:
+        log.exception("admin panel crashed")
 
 def load_config(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as f:
@@ -189,6 +206,9 @@ def run(config_path: Path) -> int:
     max_in_flight = int(api_cfg.get("max_in_flight", 4))
     log.info("max_in_flight=%d (OBSC processing queue depth)", max_in_flight)
 
+    t = threading.Thread(target=_start_admin, args=(config,), daemon=True, name="admin-http")
+    t.start()
+
     log.info("reconciling state after previous run")
     pipeline.reconcile_on_startup()
     log.info("reconcile finished")
@@ -236,5 +256,5 @@ def run(config_path: Path) -> int:
 
 
 if __name__ == "__main__":
-    cfg = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("config.yaml")
+    cfg = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("config.yaml.example")
     sys.exit(run(cfg) or 0)

@@ -273,20 +273,35 @@ class Pipeline:
 
     def wait_for_free_slot(self, max_in_flight: int) -> None:
         """Блокирует, пока число processing-записей >= max_in_flight."""
+        announced = False
+        last_heartbeat = 0.0
         while True:
             remaining = self._poll_processing_once()
             if remaining < max_in_flight:
+                if announced:
+                    log.info("slot freed (%d/%d in flight)", remaining, max_in_flight)
                 return
-            log.debug("slots full (%d/%d), waiting", remaining, max_in_flight)
+            now = time.monotonic()
+            if not announced:
+                log.info("slots full (%d/%d), waiting for OBSC", remaining, max_in_flight)
+                announced = True
+                last_heartbeat = now
+            elif now - last_heartbeat >= 30:
+                log.info("still waiting: %d/%d in flight on OBSC", remaining, max_in_flight)
+                last_heartbeat = now
             time.sleep(self.poll_interval_sec)
 
     def drain(self) -> None:
         """Ждёт, пока все processing-записи достигнут терминального состояния."""
+        last_heartbeat = 0.0
         while True:
             remaining = self._poll_processing_once()
             if remaining == 0:
                 return
-            log.info("draining: %d task(s) still processing", remaining)
+            now = time.monotonic()
+            if now - last_heartbeat >= 15:
+                log.info("draining: %d task(s) still processing on OBSC", remaining)
+                last_heartbeat = now
             time.sleep(self.poll_interval_sec)
 
     def reconcile_on_startup(self) -> None:

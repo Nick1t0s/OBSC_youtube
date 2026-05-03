@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+{% block title %}{{ display_name }} — OBSC Admin{% endblock %}
+
+{% macro status_badge(status) %}
+{% set colors = {
+  'done': 'bg-green-950 text-green-400 border-green-800',
+  'processing': 'bg-blue-950 text-blue-400 border-blue-800',
+  'downloading': 'bg-yellow-950 text-yellow-400 border-yellow-800',
+  'uploading': 'bg-yellow-950 text-yellow-300 border-yellow-800',
+  'download_error': 'bg-red-950 text-red-400 border-red-800',
+  'upload_error': 'bg-red-950 text-red-300 border-red-800',
+  'process_error': 'bg-orange-950 text-orange-400 border-orange-800',
+} %}
+<span class="inline-flex items-center px-2 py-0.5 rounded text-xs border
+             {{ colors.get(status, 'bg-gray-800 text-gray-400 border-gray-700') }}">
+  {{ STATUS_LABELS.get(status, status) }}
+</span>
+{% endmacro %}
+
+{% block content %}
+<div class="p-6 space-y-5">
+
+  <!-- Breadcrumb -->
+  <div class="flex items-center gap-2 text-sm text-gray-500">
+    <a href="{{ url_for('channels') }}" class="hover:text-white transition-colors">Каналы</a>
+    <span>/</span>
+    <span class="text-white">{{ display_name }}</span>
+  </div>
+
+  <!-- Header + actions -->
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <h1 class="text-lg font-semibold text-white">{{ display_name }}</h1>
+      <a href="{{ channel_url }}" target="_blank"
+         class="text-xs text-gray-500 hover:text-gray-300 transition-colors break-all">
+        {{ channel_url }} ↗
+      </a>
+    </div>
+    <div class="flex items-center gap-2 shrink-0">
+      {% if stats.errors > 0 %}
+      <form method="POST" action="{{ url_for('retry_channel_errors') }}"
+            onsubmit="return confirm('Удалить все {{ stats.errors }} ошибочных записей?\nОни будут переобработаны при следующем сканировании.')">
+        <input type="hidden" name="url" value="{{ channel_url }}">
+        <button type="submit"
+                class="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-red-800 text-red-400 hover:bg-red-950 transition-colors">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+          </svg>
+          Retry ошибок ({{ stats.errors }})
+        </button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Mini stats -->
+  <div class="flex flex-wrap gap-3">
+    <a href="{{ url_for('channel_videos', url=channel_url) }}"
+       class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm
+              {% if not status_filter %}bg-gray-800 text-white{% else %}text-gray-500 hover:text-white hover:bg-gray-800{% endif %} transition-colors">
+      Все <span class="font-medium">{{ stats.total }}</span>
+    </a>
+    {% set filter_items = [
+      ('done', 'text-green-400', 'Готово'),
+      ('processing', 'text-blue-400', 'Обрабатывается'),
+      ('downloading', 'text-yellow-400', 'Скачивается'),
+      ('uploading', 'text-yellow-300', 'Загружается'),
+      ('download_error', 'text-red-400', 'Ошибка скачивания'),
+      ('upload_error', 'text-red-300', 'Ошибка загрузки'),
+      ('process_error', 'text-orange-400', 'Ошибка обработки'),
+    ] %}
+    {% for s, color, label in filter_items %}
+    {% set cnt = stats.by_status.get(s, 0) %}
+    {% if cnt > 0 %}
+    <a href="{{ url_for('channel_videos', url=channel_url, status=s) }}"
+       class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors
+              {% if status_filter == s %}bg-gray-800 text-white{% else %}text-gray-500 hover:text-white hover:bg-gray-800{% endif %}">
+      <span class="{{ color }}">{{ label }}</span>
+      <span class="font-medium {{ color }}">{{ cnt }}</span>
+    </a>
+    {% endif %}
+    {% endfor %}
+  </div>
+
+  <!-- Search bar -->
+  <form method="GET" action="{{ url_for('channel_videos') }}" class="flex gap-2">
+    <input type="hidden" name="url" value="{{ channel_url }}">
+    {% if status_filter %}<input type="hidden" name="status" value="{{ status_filter }}">{% endif %}
+    <input type="text" name="q" value="{{ search }}" placeholder="Поиск по названию или video_id…"
+           class="flex-1 px-3 py-2 text-sm rounded-lg bg-gray-900 border border-gray-700 text-white
+                  placeholder-gray-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition">
+    <button type="submit"
+            class="px-4 py-2 text-sm rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors">
+      Найти
+    </button>
+    {% if search %}
+    <a href="{{ url_for('channel_videos', url=channel_url, status=status_filter) }}"
+       class="px-3 py-2 text-sm rounded-lg border border-gray-700 text-gray-500 hover:text-white transition-colors">
+      ✕
+    </a>
+    {% endif %}
+  </form>
+
+  <!-- Video table -->
+  <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+    {% if videos %}
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-gray-800 text-left">
+          <th class="px-4 py-3 text-xs font-medium text-gray-500 w-28">Video ID</th>
+          <th class="px-4 py-3 text-xs font-medium text-gray-500">Название</th>
+          <th class="px-4 py-3 text-xs font-medium text-gray-500 w-40">Статус</th>
+          <th class="px-4 py-3 text-xs font-medium text-gray-500 w-36">Обновлено</th>
+          <th class="px-4 py-3 text-xs font-medium text-gray-500 w-24"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-800">
+        {% for video in videos %}
+        <tr class="hover:bg-gray-800/50 transition-colors group"
+            x-data="{ showError: false }">
+          <td class="px-4 py-3">
+            <a href="https://www.youtube.com/watch?v={{ video.video_id }}" target="_blank"
+               class="text-xs font-mono text-gray-500 hover:text-indigo-400 transition-colors">
+              {{ video.video_id }}
+            </a>
+          </td>
+          <td class="px-4 py-3">
+            <div class="text-gray-200 leading-snug">
+              {{ video.title or '—' }}
+            </div>
+            {% if video.error_message %}
+            <button @click="showError = !showError"
+                    class="text-xs text-red-500 hover:text-red-400 transition-colors mt-0.5">
+              {{ 'Скрыть ошибку' if false else video.error_message[:80] }}{{ '…' if (video.error_message | length) > 80 else '' }}
+            </button>
+            <div x-show="showError" x-cloak
+                 class="mt-1 p-2 rounded bg-gray-950 text-xs font-mono text-red-300 break-all whitespace-pre-wrap max-h-32 overflow-auto">{{ video.error_message }}</div>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3">
+            {{ status_badge(video.status) }}
+          </td>
+          <td class="px-4 py-3 text-xs text-gray-500 font-mono">
+            {{ video.updated_at[:16] if video.updated_at else '—' }}
+          </td>
+          <td class="px-4 py-3 text-right">
+            {% if 'error' in video.status %}
+            <form method="POST" action="{{ url_for('retry_video', video_id=video.video_id) }}"
+                  onsubmit="return confirm('Удалить запись {{ video.video_id }} из БД для повторной обработки?')">
+              <input type="hidden" name="channel_url" value="{{ channel_url }}">
+              <button type="submit"
+                      class="text-xs text-gray-600 hover:text-indigo-400 opacity-0 group-hover:opacity-100 transition-all">
+                retry
+              </button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <!-- Pagination -->
+    {% if total_pages > 1 %}
+    <div class="flex items-center justify-between px-4 py-3 border-t border-gray-800">
+      <span class="text-xs text-gray-500">
+        Показано {{ ((page - 1) * 50) + 1 }}–{{ [page * 50, total_count] | min }} из {{ total_count }}
+      </span>
+      <div class="flex items-center gap-1">
+        {% if page > 1 %}
+        <a href="{{ url_for('channel_videos', url=channel_url, status=status_filter, q=search, page=page-1) }}"
+           class="px-3 py-1.5 text-xs rounded-md border border-gray-700 text-gray-400 hover:text-white hover:border-gray-500 transition-colors">
+          ← Назад
+        </a>
+        {% endif %}
+        <span class="px-3 py-1.5 text-xs text-gray-300">
+          {{ page }} / {{ total_pages }}
+        </span>
+        {% if page < total_pages %}
+        <a href="{{ url_for('channel_videos', url=channel_url, status=status_filter, q=search, page=page+1) }}"
+           class="px-3 py-1.5 text-xs rounded-md border border-gray-700 text-gray-400 hover:text-white hover:border-gray-500 transition-colors">
+          Вперёд →
+        </a>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="text-center py-12 text-gray-600 text-sm">
+      {% if search %}
+        Ничего не найдено по запросу «{{ search }}»
+      {% elif status_filter %}
+        Нет видео со статусом «{{ STATUS_LABELS.get(status_filter, status_filter) }}»
+      {% else %}
+        Нет видео для этого канала
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}

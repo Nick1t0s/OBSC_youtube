@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}Дашборд — OBSC Admin{% endblock %}
+
+{% block content %}
+<div class="p-6 space-y-6">
+
+  <div class="flex items-center justify-between">
+    <h1 class="text-lg font-semibold text-white">Дашборд</h1>
+    <div class="flex items-center gap-3">
+      <!-- OBSC health button -->
+      <div x-data="{ status: null, loading: false }" class="flex items-center gap-2">
+        <button @click="loading = true; fetch('/api/obsc-health').then(r=>r.json()).then(d=>{ status=d; loading=false; })"
+                class="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-gray-700 text-gray-400 hover:text-white hover:border-gray-500 transition-colors">
+          <svg class="w-3.5 h-3.5" :class="loading && 'animate-spin'" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+          </svg>
+          OBSC Health
+        </button>
+        <span x-show="status !== null" x-cloak
+              :class="status && status.ok ? 'text-green-400 bg-green-950 border-green-800' : 'text-red-400 bg-red-950 border-red-800'"
+              class="px-2 py-0.5 text-xs rounded border">
+          <span x-text="status && status.ok ? '✓ OK ' + (status.status || '') : '✗ ' + (status && status.error || 'недоступен')"></span>
+        </span>
+      </div>
+
+      <!-- Trigger scan -->
+      <form method="POST" action="{{ url_for('trigger_scan') }}"
+            onsubmit="return confirm('Удалить файл last_start.txt и запустить сканирование?')">
+        <button type="submit"
+                class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-indigo-600 hover:bg-indigo-500 text-white transition-colors">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
+          </svg>
+          Запустить сканирование
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Stat cards -->
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+      <div class="text-2xl font-bold text-white" id="stat-total">{{ stats.total }}</div>
+      <div class="text-xs text-gray-500 mt-0.5">Всего видео в БД</div>
+    </div>
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+      <div class="text-2xl font-bold text-green-400" id="stat-done">{{ stats.done }}</div>
+      <div class="text-xs text-gray-500 mt-0.5">Готово</div>
+    </div>
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+      <div class="text-2xl font-bold text-red-400" id="stat-errors">{{ stats.errors }}</div>
+      <div class="text-xs text-gray-500 mt-0.5">Ошибок</div>
+    </div>
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+      <div class="text-2xl font-bold text-blue-400" id="stat-inflight">{{ stats.in_flight }}</div>
+      <div class="text-xs text-gray-500 mt-0.5">В обработке</div>
+      <div class="text-[10px] text-gray-600 mt-0.5" id="stat-updated"></div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+    <!-- Schedule info -->
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+      <h2 class="text-sm font-medium text-gray-300 mb-4">Расписание сканирования</h2>
+      <div class="space-y-3">
+        <div class="flex justify-between items-center py-2.5 border-b border-gray-800">
+          <span class="text-sm text-gray-500">Последний запуск</span>
+          <span class="text-sm text-white font-mono">
+            {% if last_start %}
+              {{ last_start.strftime('%d.%m.%Y %H:%M:%S') }}
+            {% else %}
+              <span class="text-gray-600">не запускался</span>
+            {% endif %}
+          </span>
+        </div>
+        <div class="flex justify-between items-center py-2.5 border-b border-gray-800">
+          <span class="text-sm text-gray-500">Следующий запуск</span>
+          <span class="text-sm font-mono
+            {% if next_start and next_start > now %}text-yellow-400{% elif next_start %}text-green-400{% else %}text-green-400{% endif %}">
+            {% if next_start %}
+              {{ next_start.strftime('%d.%m.%Y %H:%M:%S') }}
+              {% if next_start <= now %}
+                <span class="text-green-400 text-xs ml-1">(сейчас)</span>
+              {% endif %}
+            {% else %}
+              <span class="text-green-400">сейчас</span>
+            {% endif %}
+          </span>
+        </div>
+        <div class="flex justify-between items-center py-2.5 border-b border-gray-800">
+          <span class="text-sm text-gray-500">Интервал</span>
+          <span class="text-sm text-white">
+            {% if scan_interval >= 3600 %}
+              {{ (scan_interval // 3600) }}ч {{ ((scan_interval % 3600) // 60) }}м
+            {% else %}
+              {{ scan_interval // 60 }}м {{ scan_interval % 60 }}с
+            {% endif %}
+          </span>
+        </div>
+        {% if last_start %}
+        <div class="flex justify-between items-center py-2.5">
+          <span class="text-sm text-gray-500">Прошло</span>
+          <span class="text-sm text-white" id="elapsed-display">
+            {% set elapsed_sec = (now - last_start).total_seconds() | int %}
+            {% if elapsed_sec >= 3600 %}
+              {{ elapsed_sec // 3600 }}ч {{ (elapsed_sec % 3600) // 60 }}м назад
+            {% elif elapsed_sec >= 60 %}
+              {{ elapsed_sec // 60 }}м {{ elapsed_sec % 60 }}с назад
+            {% else %}
+              {{ elapsed_sec }}с назад
+            {% endif %}
+          </span>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Status breakdown -->
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+      <h2 class="text-sm font-medium text-gray-300 mb-4">Разбивка по статусам</h2>
+      <div class="space-y-2">
+        {% set status_config = [
+          ('done', 'bg-green-500', 'Готово'),
+          ('processing', 'bg-blue-500', 'Обрабатывается'),
+          ('downloading', 'bg-yellow-500', 'Скачивается'),
+          ('uploading', 'bg-yellow-400', 'Загружается'),
+          ('download_error', 'bg-red-500', 'Ошибка скачивания'),
+          ('upload_error', 'bg-red-400', 'Ошибка загрузки'),
+          ('process_error', 'bg-orange-500', 'Ошибка обработки'),
+        ] %}
+        {% for status, color, label in status_config %}
+        {% set count = stats.by_status.get(status, 0) %}
+        {% if count > 0 or status == 'done' %}
+        <div class="flex items-center gap-3">
+          <div class="w-2 h-2 rounded-full {{ color }} shrink-0"></div>
+          <span class="text-sm text-gray-400 flex-1">{{ label }}</span>
+          <span class="text-sm font-medium text-white">{{ count }}</span>
+          {% if stats.total > 0 %}
+          <div class="w-24 bg-gray-800 rounded-full h-1.5">
+            <div class="{{ color }} h-1.5 rounded-full" style="width: {{ [(count / stats.total * 100), 100] | min | round(1) }}%"></div>
+          </div>
+          {% endif %}
+        </div>
+        {% endif %}
+        {% endfor %}
+        {% if stats.total == 0 %}
+        <p class="text-sm text-gray-600">Нет данных</p>
+        {% endif %}
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// Auto-refresh stats every 10s when something is in flight
+function refreshStats() {
+  fetch('/api/stats')
+    .then(r => r.json())
+    .then(d => {
+      document.getElementById('stat-total').textContent = d.stats.total;
+      document.getElementById('stat-done').textContent = d.stats.done;
+      document.getElementById('stat-errors').textContent = d.stats.errors;
+      document.getElementById('stat-inflight').textContent = d.stats.in_flight;
+      const el = document.getElementById('stat-updated');
+      if (el) {
+        const now = new Date();
+        el.textContent = 'обновлено ' + now.toLocaleTimeString('ru-RU');
+      }
+      if (d.stats.in_flight > 0) {
+        setTimeout(refreshStats, 5000);
+      } else {
+        setTimeout(refreshStats, 15000);
+      }
+    })
+    .catch(() => setTimeout(refreshStats, 30000));
+}
+setTimeout(refreshStats, 10000);
+</script>
+{% endblock %}

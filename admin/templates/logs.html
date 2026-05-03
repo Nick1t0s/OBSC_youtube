@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}Логи — OBSC Admin{% endblock %}
+
+{% block content %}
+<div class="p-6 h-full flex flex-col gap-4" style="height: calc(100vh - 0px);">
+
+  <div class="flex items-center justify-between">
+    <h1 class="text-lg font-semibold text-white">Лог скраппера</h1>
+    <div class="flex items-center gap-3" x-data>
+      <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+        <input type="checkbox" checked id="auto-scroll" class="accent-indigo-500">
+        Автопрокрутка
+      </label>
+      <button onclick="logContainer.innerHTML = ''"
+              class="px-3 py-1.5 text-xs rounded-md border border-gray-700 text-gray-400 hover:text-white hover:border-gray-500 transition-colors">
+        Очистить экран
+      </button>
+      <div id="connection-status"
+           class="flex items-center gap-1.5 text-xs text-yellow-400">
+        <span class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse"></span>
+        Подключение…
+      </div>
+    </div>
+  </div>
+
+  <!-- Log filter -->
+  <div class="flex items-center gap-2">
+    <span class="text-xs text-gray-500">Фильтр:</span>
+    <button onclick="setFilter('')"
+            id="filter-all"
+            class="px-2 py-1 text-xs rounded border border-indigo-600 bg-indigo-950 text-indigo-400">
+      Всё
+    </button>
+    <button onclick="setFilter('ERROR')"
+            id="filter-error"
+            class="px-2 py-1 text-xs rounded border border-gray-700 text-gray-400 hover:border-red-700 hover:text-red-400 transition-colors">
+      ERROR
+    </button>
+    <button onclick="setFilter('WARNING')"
+            id="filter-warn"
+            class="px-2 py-1 text-xs rounded border border-gray-700 text-gray-400 hover:border-yellow-700 hover:text-yellow-400 transition-colors">
+      WARNING
+    </button>
+    <button onclick="setFilter('INFO')"
+            id="filter-info"
+            class="px-2 py-1 text-xs rounded border border-gray-700 text-gray-400 hover:border-gray-500 hover:text-gray-300 transition-colors">
+      INFO
+    </button>
+  </div>
+
+  <!-- Log terminal -->
+  <div id="log-container"
+       class="flex-1 bg-gray-950 border border-gray-800 rounded-xl overflow-auto p-4 min-h-0"
+       style="min-height: 300px;">
+    <div id="log-lines" class="space-y-0"></div>
+  </div>
+
+</div>
+
+<script>
+let activeFilter = '';
+let allLines = [];
+const logLines = document.getElementById('log-lines');
+const logContainer = document.getElementById('log-container');
+const statusEl = document.getElementById('connection-status');
+const autoScrollEl = document.getElementById('auto-scroll');
+
+function setFilter(level) {
+  activeFilter = level;
+  ['all', 'error', 'warn', 'info'].forEach(id => {
+    const btn = document.getElementById('filter-' + id);
+    btn.classList.remove('border-indigo-600', 'bg-indigo-950', 'text-indigo-400');
+    btn.classList.add('border-gray-700', 'text-gray-400');
+  });
+  const active = document.getElementById('filter-' + (level.toLowerCase() || 'all'));
+  if (active) {
+    active.classList.add('border-indigo-600', 'bg-indigo-950', 'text-indigo-400');
+    active.classList.remove('border-gray-700', 'text-gray-400');
+  }
+  renderLines();
+}
+
+function classifyLine(line) {
+  if (line.includes(' ERROR ') || line.includes('[ERROR]')) return 'error';
+  if (line.includes(' WARNING ') || line.includes('[WARNING]')) return 'warning';
+  if (line.includes(' DEBUG ') || line.includes('[DEBUG]')) return 'debug';
+  return 'info';
+}
+
+function colorLine(line, cls) {
+  const span = document.createElement('div');
+  span.className = 'log-line ' + cls;
+  span.setAttribute('data-level', cls);
+  span.textContent = line;
+  return span;
+}
+
+function renderLines() {
+  logLines.innerHTML = '';
+  allLines.forEach(line => {
+    const cls = classifyLine(line);
+    if (activeFilter && cls !== activeFilter.toLowerCase() &&
+        !(activeFilter === 'WARNING' && cls === 'warning') &&
+        !(activeFilter === 'ERROR' && cls === 'error') &&
+        !(activeFilter === 'INFO' && (cls === 'info' || cls === 'debug'))) {
+      // Check string match for flexibility
+      if (!line.toUpperCase().includes(activeFilter)) return;
+    }
+    logLines.appendChild(colorLine(line, cls));
+  });
+  scrollIfNeeded();
+}
+
+function scrollIfNeeded() {
+  if (autoScrollEl.checked) {
+    logContainer.scrollTop = logContainer.scrollHeight;
+  }
+}
+
+function addLine(line) {
+  if (!line.trim()) return;
+  allLines.push(line);
+  if (allLines.length > 5000) allLines = allLines.slice(-5000);
+
+  const cls = classifyLine(line);
+  if (activeFilter && !line.toUpperCase().includes(activeFilter)) return;
+
+  const el = colorLine(line, cls);
+  logLines.appendChild(el);
+  if (logLines.children.length > 5000) {
+    logLines.removeChild(logLines.firstChild);
+  }
+  scrollIfNeeded();
+}
+
+function connect() {
+  const es = new EventSource('/api/log-stream');
+
+  es.onopen = () => {
+    statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-green-400"></span> Подключено';
+    statusEl.className = 'flex items-center gap-1.5 text-xs text-green-400';
+  };
+
+  es.onmessage = (e) => {
+    try {
+      const line = JSON.parse(e.data);
+      addLine(line);
+    } catch {}
+  };
+
+  es.onerror = () => {
+    statusEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-red-400 animate-pulse"></span> Переподключение…';
+    statusEl.className = 'flex items-center gap-1.5 text-xs text-red-400';
+    es.close();
+    setTimeout(connect, 3000);
+  };
+}
+
+connect();
+</script>
+{% endblock %}
